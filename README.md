@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ResolveAI Grievance Redressal Prototype
 
 A local Flask and SQLite prototype for citizen complaint intake, heuristic AI classification, SLA tracking, escalation, and administrator review.
@@ -84,3 +85,7 @@ All points are derived from append-only ledger entries; a database unique event 
 - The development server, wildcard API CORS configuration, local token storage, and SQLite database are for a local demo only. Deployments handling real citizen information need production-grade hosting, secret/session management, access policies, backups, and privacy controls.
 - Evidence uploads are limited to 8 MB and accepted image/PDF/Word extensions. Files are stored in the local `uploads` directory and served only through the authenticated complaint evidence endpoint.
 - Rewards are non-monetary prototype recognition only. No discounts, coupons, cash, or external benefits are available.
+=======
+# grievance-system
+Secure digital grievance redressal and escalation system
+>>>>>>> b34073f452476717fbda7cd2b3ac3ee9f6a75b3a
