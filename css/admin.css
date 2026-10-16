@@ -1,0 +1,30 @@
+.queue-filters {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) repeat(2, minmax(150px, 220px));
+  gap: 12px;
+  align-items: end;
+  margin: 0 0 18px;
+}
+
+.queue-filters label {
+  display: grid;
+  gap: 6px;
+  color: #42556b;
+  font-size: .76rem;
+  font-weight: bold;
+}
+
+.queue-filters input,
+.queue-filters select {
+  min-height: 42px;
+}
+
+@media (max-width: 600px) {
+  .queue-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .queue-search {
+    grid-column: 1 / -1;
+  }
+}

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin Dashboard | ResolveAI</title>
+  <link rel="stylesheet" href="css/style.css?v=2" />
+  <link rel="stylesheet" href="css/admin.css?v=1" />
+</head>
+<body data-page="admin">
+  <header class="app-header">
+    <div class="wrap app-head">
+      <a class="brand" href="admin.html"><b>R</b> Resolve<span>AI</span></a>
+      <nav class="app-nav">
+        <a class="active" href="admin.html">Overview</a>
+      </nav>
+      <div class="user">
+        <span class="avatar" data-user-initial>A</span>
+        <span data-user-name>Admin</span>
+        <button class="view" data-logout>Log out</button>
+      </div>
+    </div>
+  </header>
+  <main class="wrap main">
+    <div class="heading">
+      <div>
+        <p class="eyebrow">ADMINISTRATOR PORTAL</p>
+        <h1>Operations dashboard</h1>
+        <p>Track intake, routing, SLA compliance, and escalations.</p>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><p>Total complaints <i></i></p><strong data-admin-stat="total">0</strong></div>
+      <div class="stat"><p>Pending <i></i></p><strong data-admin-stat="pending">0</strong></div>
+      <div class="stat"><p>In progress <i></i></p><strong data-admin-stat="in_progress">0</strong></div>
+      <div class="stat"><p>Resolved <i></i></p><strong data-admin-stat="resolved">0</strong></div>
+      <div class="stat"><p>Escalated <i></i></p><strong data-admin-stat="escalated">0</strong></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Complaints queue</h2><span id="adminQueueCount" class="muted" aria-live="polite"></span></div>
+      <div class="queue-filters" role="search">
+        <label class="queue-search">Search complaints<input id="adminSearch" type="search" placeholder="ID, title, or location"></label>
+        <label>Status<select id="adminStatusFilter"><option value="">All statuses</option><option>Pending</option><option>In Progress</option><option>Resolved</option><option>Rejected</option><option>Escalated</option></select></label>
+        <label>Priority<select id="adminPriorityFilter"><option value="">All priorities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select></label>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Category</th>
+              <th>Priority</th>
+              <th>Status</th>
+              <th>Department</th>
+              <th>Deadline</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="adminComplaintRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="adminDetailModal" class="modal-bg">
+    <div class="modal">
+      <div class="modal-top">
+        <h2 data-detail-title>Complaint details</h2>
+        <button class="close" data-close>×</button>
+      </div>
+      <p data-detail-description class="muted"></p>
+      <a class="link" href="#" data-evidence-download hidden>Download evidence</a>
+      <div class="details">
+        <div><small>Complaint ID</small><strong data-detail-id>—</strong></div>
+        <div><small>Status</small><strong data-detail-status>—</strong></div>
+        <div><small>Department</small><strong data-detail-department>—</strong></div>
+        <div><small>Priority</small><strong data-detail-priority>—</strong></div>
+      </div>
+      <div class="admin-actions" style="margin-top: 18px; display: grid; gap: 12px;">
+        <label>Status<select id="adminStatus"><option value="Pending">Pending</option><option value="In Progress">In Progress</option><option value="Resolved">Resolved</option><option value="Rejected">Rejected</option><option value="Escalated">Escalated</option></select></label>
+        <label>Department<select id="adminDepartment"><option value="Water Supply Department">Water Supply Department</option><option value="Sanitation Department">Sanitation Department</option><option value="Electrical & Street Lighting Department">Electrical & Street Lighting Department</option><option value="Public Works Department">Public Works Department</option><option value="Drainage Department">Drainage Department</option><option value="Administration Office">Administration Office</option><option value="Campus Facilities Department">Campus Facilities Department</option><option value="Administrator Review Queue">Administrator Review Queue</option></select></label>
+        <label>Assigned officer<input id="adminAssignedOfficer" maxlength="120" placeholder="Officer name"></label>
+        <label>Priority<select id="adminPriority"><option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Critical">Critical</option></select></label>
+        <label>Resolution<textarea id="adminResolution" rows="4" placeholder="Add resolution notes or evidence summary..."></textarea></label>
+        <button class="btn" id="saveAdminUpdate">Save changes</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/main.js?v=6"></script>
+  <script src="js/admin.js?v=3"></script>
+</body>
+</html>

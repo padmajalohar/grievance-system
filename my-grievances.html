@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>My grievances | ResolveAI</title>
+  <link rel="stylesheet" href="css/style.css?v=2">
+</head>
+<body data-page="grievances">
+  <header class="app-header">
+    <div class="wrap app-head">
+      <a class="brand" href="my-grievances.html"><b>R</b> Resolve<span>AI</span></a>
+      <nav class="app-nav">
+        <a href="submit-grievance.html">Submit grievance</a>
+        <a class="active" href="my-grievances.html">My grievances</a>
+      </nav>
+      <div class="user">
+        <span class="avatar" data-user-initial>D</span>
+        <span data-user-name>Citizen</span>
+        <button class="view" data-logout>Log out</button>
+      </div>
+    </div>
+  </header>
+  <main class="wrap main">
+    <div class="heading">
+      <div>
+        <p class="eyebrow">GRIEVANCE HISTORY</p>
+        <h1>My grievances</h1>
+        <p>Track every complaint, its owner, and its resolution deadline.</p>
+      </div>
+      <a class="btn" href="submit-grievance.html">+ New grievance</a>
+    </div>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>All complaints</h2>
+        <span class="muted">SLA is calculated from submission date</span>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Grievance ID</th><th>Title</th><th>Category</th><th>Priority</th><th>Status</th><th>Department</th><th>SLA deadline</th><th></th></tr>
+          </thead>
+          <tbody id="grievanceRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <div id="detailModal" class="modal-bg">
+    <div class="modal">
+      <div class="modal-top">
+        <h2 data-detail="title">Details</h2>
+        <button class="close" data-close>×</button>
+      </div>
+      <p data-detail="description" class="muted"></p>
+      <a class="link" href="#" data-evidence-download hidden>Download evidence</a>
+      <div class="details">
+        <div><small>Grievance ID</small><strong data-detail="id">—</strong></div>
+        <div><small>Status</small><strong data-detail="status">—</strong></div>
+        <div><small>Department</small><strong data-detail="department">—</strong></div>
+        <div><small>SLA deadline</small><strong data-detail="deadline">—</strong></div>
+      </div>
+      <section class="history"><h3>Updates</h3><div data-detail-history></div></section>
+    </div>
+  </div>
+  <script src="js/main.js?v=6"></script>
+  <script src="js/grievance.js?v=5"></script>
+</body>
+</html>
