@@ -8,17 +8,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  if (['submit', 'grievances', 'admin'].includes(page)) {
+  if (['submit', 'grievances', 'admin', 'department'].includes(page)) {
     if (!user || !token) {
       location.href = 'login.html';
       return;
     }
     if (page === 'admin' && user.role !== 'admin') {
-      location.href = 'my-grievances.html';
+      location.href = user.role === 'department_staff' ? 'department.html' : 'my-grievances.html';
+      return;
+    }
+    if (page === 'department' && user.role !== 'department_staff') {
+      location.href = user.role === 'admin' ? 'admin.html' : 'my-grievances.html';
       return;
     }
     if (['submit', 'grievances'].includes(page) && user.role !== 'citizen') {
-      location.href = 'admin.html';
+      location.href = user.role === 'admin' ? 'admin.html' : 'department.html';
       return;
     }
   }
@@ -32,7 +36,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.querySelectorAll('[data-logout]').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
+      try {
+        await window.apiRequest('/api/logout', { method: 'POST' });
+      } catch (error) {
+        alert(t(error.message));
+      }
       localStorage.removeItem('resolve_token');
       localStorage.removeItem('resolve_user');
       location.href = 'index.html';
@@ -45,7 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     event.preventDefault();
 
     try {
-      const response = await fetch(`http://localhost:5001/api/complaints/${encodeURIComponent(link.dataset.complaintId)}/evidence`, {
+      const response = await fetch(window.resolveApiUrl(`/api/complaints/${encodeURIComponent(link.dataset.complaintId)}/evidence`), {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!response.ok) {
@@ -61,7 +70,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       download.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
     } catch (error) {
-      alert(error.message);
+      alert(t(error.message));
     }
   });
 
@@ -100,6 +109,13 @@ function configureEvidenceLink(modal, complaint) {
   link.dataset.filename = String(complaint.evidence || '').split(/[\\/]/).pop().replace(/^[a-f0-9]{32}_/i, '');
 }
 
+window.resolveApiUrl = function resolveApiUrl(path) {
+  const apiBase = window.location.origin && window.location.origin !== 'null'
+    ? window.location.origin
+    : 'http://localhost:5001';
+  return new URL(path, apiBase);
+};
+
 window.apiRequest = async function apiRequest(path, options = {}) {
   const token = localStorage.getItem('resolve_token');
   const headers = { ...(options.headers || {}) };
@@ -112,7 +128,7 @@ window.apiRequest = async function apiRequest(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`http://localhost:5001${path}`, {
+  const response = await fetch(window.resolveApiUrl(path), {
     ...options,
     headers,
   });
@@ -123,6 +139,7 @@ window.apiRequest = async function apiRequest(path, options = {}) {
   if (!response.ok) {
     const error = new Error(typeof payload === 'object' ? (payload.error || 'Request failed.') : payload || 'Request failed.');
     error.payload = payload;
+    error.status = response.status;
     throw error;
   }
 
@@ -132,7 +149,8 @@ window.apiRequest = async function apiRequest(path, options = {}) {
 function formatDate(value) {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const locale = window.ResolveAIi18n?.localeTags?.[localStorage.getItem('resolve_language')] || 'en-IN';
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 function isBreached(item) {

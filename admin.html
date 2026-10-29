@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Admin Dashboard | ResolveAI</title>
   <link rel="stylesheet" href="css/style.css?v=2" />
-  <link rel="stylesheet" href="css/admin.css?v=1" />
+  <link rel="stylesheet" href="css/admin.css?v=3" />
+  <link rel="stylesheet" href="css/i18n.css?v=1" />
 </head>
 <body data-page="admin">
   <header class="app-header">
@@ -41,8 +42,9 @@
       <div class="panel-head"><h2>Complaints queue</h2><span id="adminQueueCount" class="muted" aria-live="polite"></span></div>
       <div class="queue-filters" role="search">
         <label class="queue-search">Search complaints<input id="adminSearch" type="search" placeholder="ID, title, or location"></label>
-        <label>Status<select id="adminStatusFilter"><option value="">All statuses</option><option>Pending</option><option>In Progress</option><option>Resolved</option><option>Rejected</option><option>Escalated</option></select></label>
-        <label>Priority<select id="adminPriorityFilter"><option value="">All priorities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select></label>
+        <label>Status<select id="adminStatusFilter"><option value="">All statuses</option><option value="Pending">Pending</option><option value="In Progress">In Progress</option><option value="Resolved">Resolved</option><option value="Rejected">Rejected</option><option value="Escalated">Escalated</option></select></label>
+        <label>Priority<select id="adminPriorityFilter"><option value="">All priorities</option><option value="Critical">Critical</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></select></label>
+        <label>Department<select id="adminDepartmentFilter"><option value="">All Departments</option></select></label>
       </div>
       <div class="table-wrap">
         <table class="table">
@@ -59,6 +61,28 @@
             </tr>
           </thead>
           <tbody id="adminComplaintRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel staff-management" aria-labelledby="staffManagementTitle">
+      <div class="panel-head"><h2 id="staffManagementTitle">Department staff accounts</h2></div>
+      <form id="departmentStaffForm" class="staff-form">
+        <label>Staff name<input id="departmentStaffName" required maxlength="120" autocomplete="name"></label>
+        <label>Email address<input id="departmentStaffEmail" type="email" required autocomplete="email"></label>
+        <label>Initial password<input id="departmentStaffPassword" type="password" required minlength="12" autocomplete="new-password"></label>
+        <label>Department<select id="departmentStaffDepartment" required></select></label>
+        <button class="btn" type="submit">Create department account</button>
+      </form>
+      <form id="departmentCreateForm" class="department-create-form">
+        <label>Add department<input id="newDepartmentName" maxlength="100" required></label>
+        <button class="view" type="submit">Add department</button>
+      </form>
+      <p id="departmentStaffMessage" class="muted" role="status" aria-live="polite"></p>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody id="departmentStaffRows"></tbody>
         </table>
       </div>
     </section>
@@ -89,7 +113,8 @@
     </div>
   </div>
 
-  <script src="js/main.js?v=6"></script>
-  <script src="js/admin.js?v=3"></script>
+  <script src="js/i18n.js?v=4"></script>
+  <script src="js/main.js?v=8"></script>
+  <script src="js/admin.js?v=7"></script>
 </body>
 </html>

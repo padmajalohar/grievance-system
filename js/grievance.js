@@ -1,4 +1,17 @@
 ﻿document.addEventListener('DOMContentLoaded', async () => {
+  document.addEventListener('resolveai:languagechange', () => {
+    if (document.body.dataset.page === 'grievances') {
+      loadGrievanceList();
+      const modal = document.getElementById('detailModal');
+      if (modal?.classList.contains('show') && activeGrievanceDetail) {
+        renderGrievanceDetails(modal, activeGrievanceDetail);
+      }
+    }
+    if (document.body.dataset.page === 'submit') {
+      updateClassificationLabels(lastUnsupportedLanguageClassification);
+    }
+  });
+
   if (document.body.dataset.page === 'dashboard') {
     await loadDashboard();
   }
@@ -9,6 +22,9 @@
     initSubmitForm();
   }
 });
+
+let activeGrievanceDetail = null;
+let lastUnsupportedLanguageClassification = false;
 
 async function loadDashboard() {
   try {
@@ -38,7 +54,7 @@ async function loadDashboard() {
           <small>${escapeHtml(item.id)} · ${escapeHtml(item.status)} · ${formatDate(item.created_at)}</small>
         </div>
       </div>
-    `).join('') || '<p class="muted">No complaints yet.</p>';
+    `).join('') || `<p class="muted">${escapeHtml(t('No complaints yet.'))}</p>`;
 
     const latest = items.find((item) => item.status !== 'Resolved') || items[0];
     if (latest) {
@@ -47,7 +63,7 @@ async function loadDashboard() {
       document.getElementById('deadlineDate').textContent = formatDate(latest.deadline);
     }
   } catch (error) {
-    alert(error.message);
+    alert(t(error.message));
   }
 }
 
@@ -63,15 +79,15 @@ async function loadGrievanceList() {
         <tr>
           <td>${escapeHtml(item.id)}</td>
           <td><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.location)}</span></td>
-          <td>${escapeHtml(item.category || '—')}</td>
-          <td><span class="badge ${item.priority === 'High' || item.priority === 'Critical' ? 'escalated' : 'progress'}">${escapeHtml(item.priority || '—')}</span></td>
-          <td><span class="badge ${status.toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(status)}</span></td>
-          <td>${escapeHtml(item.department || '—')}</td>
+          <td>${escapeHtml(t(item.category || '—'))}</td>
+          <td><span class="badge ${item.priority === 'High' || item.priority === 'Critical' ? 'escalated' : 'progress'}">${escapeHtml(t(item.priority || '—'))}</span></td>
+          <td><span class="badge ${status.toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(t(status))}</span></td>
+          <td>${escapeHtml(t(item.department || '—'))}</td>
           <td>${formatDate(item.deadline)}</td>
-          <td><button class="view" data-index="${item.id}">View</button></td>
+          <td><button class="view" data-index="${item.id}">${escapeHtml(t('View'))}</button></td>
         </tr>
       `;
-    }).join('') || '<tr><td colspan="8">No complaints found.</td></tr>';
+    }).join('') || `<tr><td colspan="8">${escapeHtml(t('No complaints found.'))}</td></tr>`;
 
     grievanceRows.querySelectorAll('[data-index]').forEach((button) => {
       button.addEventListener('click', async () => {
@@ -80,28 +96,33 @@ async function loadGrievanceList() {
         const item = data.complaint;
         const modal = document.getElementById('detailModal');
         if (!modal) return;
-        modal.querySelector('[data-detail="title"]').textContent = item.title;
-        modal.querySelector('[data-detail="description"]').textContent = `${item.description}\n\nAI category: ${item.prediction?.predicted_category || item.category}\nPriority: ${item.prediction?.predicted_priority || item.priority}\nDepartment: ${item.department}`;
-        modal.querySelector('[data-detail="id"]').textContent = item.id;
-        modal.querySelector('[data-detail="status"]').textContent = isBreached(item) ? 'Escalated' : item.status;
-        modal.querySelector('[data-detail="department"]').textContent = item.department || '—';
-        modal.querySelector('[data-detail="deadline"]').textContent = formatDate(item.deadline);
-        configureEvidenceLink(modal, item);
-        const historyContainer = modal.querySelector('[data-detail-history]');
-        if (historyContainer) {
-          historyContainer.innerHTML = (item.history || []).map((entry) => `
-            <article class="history-entry">
-              <div><strong>${escapeHtml(entry.action)}</strong><time>${escapeHtml(formatDate(entry.created_at))}</time></div>
-              <p>${escapeHtml(entry.details)}</p>
-            </article>
-          `).join('') || '<p class="muted">No updates yet.</p>';
-        }
+        activeGrievanceDetail = item;
+        renderGrievanceDetails(modal, item);
         window.configureCivicUpdateForm?.(modal, item);
         modal.classList.add('show');
       });
     });
   } catch (error) {
-    alert(error.message);
+    alert(t(error.message));
+  }
+}
+
+function renderGrievanceDetails(modal, item) {
+  modal.querySelector('[data-detail="title"]').textContent = item.title;
+  modal.querySelector('[data-detail="description"]').textContent = `${item.description}\n\n${t('AI category:')} ${t(item.prediction?.predicted_category || item.category)}\n${t('Priority:')} ${t(item.prediction?.predicted_priority || item.priority)}\n${t('Department:')} ${t(item.department)}`;
+  modal.querySelector('[data-detail="id"]').textContent = item.id;
+  modal.querySelector('[data-detail="status"]').textContent = t(isBreached(item) ? 'Escalated' : item.status);
+  modal.querySelector('[data-detail="department"]').textContent = t(item.department || '—');
+  modal.querySelector('[data-detail="deadline"]').textContent = formatDate(item.deadline);
+  configureEvidenceLink(modal, item);
+  const historyContainer = modal.querySelector('[data-detail-history]');
+  if (historyContainer) {
+    historyContainer.innerHTML = (item.history || []).map((entry) => `
+      <article class="history-entry">
+        <div><strong>${escapeHtml(t(entry.action))}</strong><time>${escapeHtml(formatDate(entry.created_at))}</time></div>
+        <p>${escapeHtml(entry.details)}</p>
+      </article>
+    `).join('') || `<p class="muted">${escapeHtml(t('No updates yet.'))}</p>`;
   }
 }
 
@@ -111,7 +132,7 @@ function initSubmitForm() {
   if (!form || !evidence) return;
 
   evidence.addEventListener('change', () => {
-    const fileName = evidence.files[0]?.name || 'Optional evidence: image or document';
+    const fileName = evidence.files[0]?.name || t('Optional evidence: image or document');
     document.getElementById('fileName').textContent = fileName;
   });
 
@@ -125,7 +146,7 @@ function initSubmitForm() {
     };
 
     if (!payload.title || !payload.description || !payload.location) {
-      alert('Please fill in the title, description, and location.');
+      alert(t('Please fill in the title, description, and location.'));
       return;
     }
 
@@ -143,20 +164,34 @@ function initSubmitForm() {
       document.getElementById('confirmation').classList.remove('hidden');
       document.getElementById('analysisResult').classList.remove('hidden');
       document.getElementById('generatedId').textContent = result.complaint.id;
-      document.getElementById('predictedCategory').textContent = result.prediction.predicted_category;
-      document.getElementById('predictedPriority').textContent = result.prediction.predicted_priority;
+      lastUnsupportedLanguageClassification = result.prediction.model_version === 'unsupported_language_fallback';
+      updateClassificationLabels(lastUnsupportedLanguageClassification);
+      document.getElementById('predictedCategory').textContent = t(result.prediction.predicted_category);
+      document.getElementById('predictedPriority').textContent = t(result.prediction.predicted_priority);
       document.getElementById('confidence').textContent = `${result.prediction.confidence}%`;
-      document.getElementById('predictedDepartment').textContent = result.prediction.recommended_department;
+      document.getElementById('predictedDepartment').textContent = t(result.prediction.recommended_department);
       form.reset();
-      document.getElementById('fileName').textContent = 'Optional evidence: image or document';
+      document.getElementById('fileName').textContent = t('Optional evidence: image or document');
     } catch (error) {
       const submissionError = document.getElementById('submissionError');
       if (submissionError) {
-        submissionError.textContent = error.message;
+        submissionError.textContent = t(error.message);
         submissionError.hidden = false;
       } else {
-        alert(error.message);
+        alert(t(error.message));
       }
     }
   });
+}
+
+function updateClassificationLabels(unsupported) {
+  const categoryLabel = document.getElementById('categoryResultLabel');
+  const priorityLabel = document.getElementById('priorityResultLabel');
+  const notice = document.getElementById('classificationNotice');
+  if (categoryLabel) categoryLabel.textContent = t(unsupported ? 'Category awaiting human review' : 'Predicted category');
+  if (priorityLabel) priorityLabel.textContent = t(unsupported ? 'Priority pending human assessment' : 'Predicted priority');
+  if (notice) {
+    notice.textContent = t('This language is not supported by the complaint classifier. No category or priority prediction was made; this complaint is queued for human review.');
+    notice.hidden = !unsupported;
+  }
 }

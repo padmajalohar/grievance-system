@@ -1,11 +1,22 @@
 document.addEventListener('DOMContentLoaded', () => {
   const register = document.getElementById('registerForm');
   const login = document.getElementById('loginForm');
+  const loginRole = document.getElementById('loginRole');
+  const citizenSignupPrompt = document.getElementById('citizenSignupPrompt');
+  const departmentAccountNotice = document.getElementById('departmentAccountNotice');
+
+  const updateSignupPrompt = () => {
+    const departmentSelected = loginRole?.value === 'department_staff';
+    if (citizenSignupPrompt) citizenSignupPrompt.hidden = departmentSelected;
+    if (departmentAccountNotice) departmentAccountNotice.hidden = !departmentSelected;
+  };
+  loginRole?.addEventListener('change', updateSignupPrompt);
+  updateSignupPrompt();
 
   const error = (id, message) => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.textContent = message;
+    el.textContent = t(message);
     el.hidden = false;
   };
 
@@ -16,18 +27,14 @@ document.addEventListener('DOMContentLoaded', () => {
       name: document.getElementById('registerName').value.trim(),
       email: document.getElementById('registerEmail').value.trim().toLowerCase(),
       password: document.getElementById('registerPassword').value,
+      role: 'citizen',
     };
 
     try {
-      const response = await fetch('http://localhost:5001/api/register', {
+      const data = await apiRequest('/api/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Unable to register.');
-      }
       localStorage.setItem('resolve_user', JSON.stringify(data.user));
       localStorage.setItem('resolve_token', data.token);
       location.href = 'my-grievances.html';
@@ -41,24 +48,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const email = document.getElementById('loginEmail').value.trim().toLowerCase();
     const password = document.getElementById('loginPassword').value;
-    const role = document.getElementById('loginRole')?.value || 'citizen';
+    const role = loginRole?.value || 'citizen';
 
     try {
-      const response = await fetch('http://localhost:5001/api/login', {
+      const data = await apiRequest('/api/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, role }),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Unable to sign in.');
-      }
       localStorage.setItem('resolve_user', JSON.stringify(data.user));
       localStorage.setItem('resolve_token', data.token);
-      location.href = role === 'admin' ? 'admin.html' : 'my-grievances.html';
+      location.href = data.user.role === 'admin'
+        ? 'admin.html'
+        : data.user.role === 'department_staff'
+          ? 'department.html'
+          : 'my-grievances.html';
     } catch (err) {
       error('loginError', err.message);
     }
   });
 });
-

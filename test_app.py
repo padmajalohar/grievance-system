@@ -3,6 +3,7 @@ import os
 import sqlite3
 import unittest
 import uuid
+from collections import Counter
 
 import app as app_module
 
@@ -36,6 +37,64 @@ class GrievanceSystemTests(unittest.TestCase):
         })
         self.assertEqual(login_response.status_code, 200)
         self.assertIn('token', login_response.get_json())
+
+    def test_public_registration_cannot_create_department_staff_accounts(self):
+        email = self.unique_email('staffsignup')
+        response = self.client.post('/api/register', json={
+            'name': 'Unapproved Department Staff',
+            'email': email,
+            'password': 'securepass123',
+            'role': 'department_staff',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('created by an administrator', response.get_json()['error'])
+        self.assertIsNone(app_module.get_user_by_email(email))
+        conn = app_module.get_db()
+        self.assertIsNone(conn.execute(
+            'SELECT 1 FROM department_staff_accounts WHERE email = ? COLLATE NOCASE',
+            (email,),
+        ).fetchone())
+        conn.close()
+
+    def test_multilingual_complaints_are_queued_without_claiming_ai_predictions(self):
+        examples = [
+            'पाणीपुरवठा बंद आहे',
+            'पानी की आपूर्ति बंद है',
+            'ನೀರಿನ ಸರಬರಾಜು ನಿಂತಿದೆ',
+            'నీటి సరఫరా నిలిచిపోయింది',
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                result = app_module.predict_grievance(text, text)
+                self.assertEqual(result['predicted_category'], 'General Review')
+                self.assertEqual(result['predicted_priority'], 'Medium')
+                self.assertEqual(result['recommended_department'], 'Administrator Review Queue')
+                self.assertEqual(result['confidence'], 0.0)
+                self.assertTrue(result['requires_human_review'])
+                self.assertEqual(result['model_version'], 'unsupported_language_fallback')
+                self.assertIn('No category or priority prediction was made', result['model_note'])
+
+    def test_multilingual_submission_preserves_original_text(self):
+        title = 'पाणीपुरवठा बंद आहे'
+        description = 'ಮೂರು ದಿನಗಳಿಂದ ನೀರು ಸರಬರಾಜು ಇಲ್ಲ. ದಯವಿಟ್ಟು ಪರಿಶೀಲಿಸಿ.'
+        citizen = self.client.post('/api/register', json={
+            'name': 'Multilingual Test Citizen',
+            'email': self.unique_email('multilingual'),
+            'password': 'securepass123',
+        }).get_json()
+        response = self.client.post('/api/complaints', json={
+            'title': title,
+            'description': description,
+            'category': 'Other',
+            'location': f'Multilingual test {uuid.uuid4().hex[:8]}',
+        }, headers={'Authorization': f'Bearer {citizen["token"]}'})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['complaint']['title'], title)
+        self.assertEqual(data['complaint']['description'], description)
+        self.assertEqual(data['prediction']['model_version'], 'unsupported_language_fallback')
+        self.assertTrue(data['prediction']['requires_human_review'])
 
     def test_02_citizen_complaint_submission_and_ai_prediction(self):
         email = self.unique_email('complaint')
@@ -262,6 +321,24 @@ class GrievanceSystemTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 200)
         return {'Authorization': f'Bearer {response.get_json()["token"]}'}
+
+    def create_department_staff(self, department='Water Supply Department'):
+        admin_headers = self.login_reward_admin()
+        email = self.unique_email('departmentstaff')
+        response = self.client.post('/api/admin/department-staff', json={
+            'name': 'Department Test Staff',
+            'email': email,
+            'password': 'StaffPassword!2026',
+            'department': department,
+        }, headers=admin_headers)
+        self.assertEqual(response.status_code, 201, response.get_json())
+        login = self.client.post('/api/login', json={
+            'email': email,
+            'password': 'StaffPassword!2026',
+            'role': 'department_staff',
+        })
+        self.assertEqual(login.status_code, 200, login.get_json())
+        return login.get_json(), admin_headers
 
     def submit_reward_complaint(self, headers, with_evidence=False):
         payload = {
@@ -505,6 +582,167 @@ class GrievanceSystemTests(unittest.TestCase):
         first_summary = self.client.get('/api/citizen/rewards', headers={'Authorization': f'Bearer {first_citizen["token"]}'}).get_json()
         self.assertEqual(first_summary['summary']['available_points'], 0)
         self.assertTrue(any(item['event_type'] == 'reversal' and item['points'] == -10 for item in first_summary['transactions']))
+
+
+    def test_department_staff_are_admin_created_scoped_and_can_resolve_assigned_complaints(self):
+        admin_headers = self.login_reward_admin()
+        citizen = self.client.post('/api/register', json={
+            'name': 'Department Workflow Citizen',
+            'email': self.unique_email('departmentcitizen'),
+            'password': 'securepass123',
+        }).get_json()
+        citizen_headers = {'Authorization': f'Bearer {citizen["token"]}'}
+        assigned = self.client.post('/api/complaints', json={
+            'title': f'Water outage {uuid.uuid4().hex[:8]}',
+            'description': 'No water supply for several days in the neighborhood.',
+            'category': 'Water Supply',
+            'location': f'Water district {uuid.uuid4().hex[:8]}',
+        }, headers=citizen_headers).get_json()['complaint']
+        unrelated = self.client.post('/api/complaints', json={
+            'title': f'Sanitation issue {uuid.uuid4().hex[:8]}',
+            'description': 'Garbage collection has not happened this week.',
+            'category': 'Sanitation',
+            'location': f'Sanitation area {uuid.uuid4().hex[:8]}',
+        }, headers=citizen_headers).get_json()['complaint']
+
+        staff, admin_headers = self.create_department_staff()
+        staff_headers = {'Authorization': f'Bearer {staff["token"]}'}
+        self.assertEqual(staff['user']['role'], 'department_staff')
+        self.assertEqual(staff['user']['department'], 'Water Supply Department')
+        mixed_case_login = self.client.post('/api/login', json={
+            'email': staff['user']['email'].upper(),
+            'password': 'StaffPassword!2026',
+            'role': 'department_staff',
+        })
+        self.assertEqual(mixed_case_login.status_code, 200, mixed_case_login.get_json())
+        self.assertEqual(mixed_case_login.get_json()['user']['department'], 'Water Supply Department')
+        staff_headers = {'Authorization': f'Bearer {mixed_case_login.get_json()["token"]}'}
+        self.assertEqual(self.client.get('/api/department/dashboard').status_code, 401)
+        response = self.client.get('/api/department/complaints', headers=staff_headers)
+        self.assertEqual(response.status_code, 200)
+        complaints = response.get_json()['complaints']
+        complaint_ids = {item['id'] for item in complaints}
+        self.assertIn(assigned['id'], complaint_ids)
+        self.assertNotIn(unrelated['id'], complaint_ids)
+        self.assertTrue(all(item['department'].casefold() == 'water supply department' for item in complaints))
+
+        self.assertEqual(self.client.get('/api/admin/dashboard', headers=staff_headers).status_code, 403)
+        citizen_response = self.client.get('/api/department/dashboard', headers=citizen_headers)
+        self.assertEqual(citizen_response.status_code, 403)
+        self.assertEqual(self.client.get(f'/api/complaints/{unrelated["id"]}', headers=staff_headers).status_code, 404)
+        self.assertEqual(self.client.patch(
+            f'/api/department/complaints/{unrelated["id"]}',
+            json={'status': 'In Progress'},
+            headers=staff_headers,
+        ).status_code, 404)
+
+        update_url = f'/api/department/complaints/{assigned["id"]}'
+        in_progress = self.client.patch(update_url, json={
+            'status': 'In Progress',
+            'department': 'Sanitation Department',
+        }, headers=staff_headers)
+        self.assertEqual(in_progress.status_code, 200, in_progress.get_json())
+        self.assertEqual(in_progress.get_json()['complaint']['department'], 'Water Supply Department')
+        self.assertEqual(self.client.patch(update_url, json={
+            'status': 'Pending',
+        }, headers=staff_headers).status_code, 400)
+        self.assertEqual(self.client.patch(update_url, json={
+            'status': 'Resolved',
+        }, headers=staff_headers).status_code, 400)
+        resolved = self.client.patch(update_url, json={
+            'status': 'Resolved',
+            'resolution': 'A damaged supply valve was repaired and service restored.',
+        }, headers=staff_headers)
+        self.assertEqual(resolved.status_code, 200, resolved.get_json())
+        self.assertEqual(resolved.get_json()['complaint']['status'], 'Resolved')
+        detail = self.client.get(update_url, headers=staff_headers).get_json()['complaint']
+        self.assertTrue(any(event['action'] == 'Resolution updated' for event in detail['history']))
+        dashboard = self.client.get('/api/department/dashboard', headers=staff_headers).get_json()
+        self.assertEqual(dashboard['department'], 'Water Supply Department')
+        current_complaints = self.client.get(
+            '/api/department/complaints',
+            headers=staff_headers,
+        ).get_json()['complaints']
+        self.assertEqual(dashboard['stats']['total'], len(current_complaints))
+        self.assertEqual(
+            dashboard['stats']['priority_counts'],
+            {key: Counter(item['priority'] for item in current_complaints)[key]
+             for key in ('Critical', 'High', 'Medium', 'Low')},
+        )
+        self.assertEqual(
+            dashboard['stats']['status_counts'],
+            {key: Counter(item['status'] for item in current_complaints)[key]
+             for key in app_module.COMPLAINT_STATUSES},
+        )
+
+    def test_department_staff_provisioning_duplicates_disable_and_logout(self):
+        admin_headers = self.login_reward_admin()
+        created_department = self.client.post('/api/admin/departments', json={
+            'name': '  Community   Safety Department  ',
+        }, headers=admin_headers)
+        self.assertEqual(created_department.status_code, 201)
+        duplicate_department = self.client.post('/api/admin/departments', json={
+            'name': 'community safety department',
+        }, headers=admin_headers)
+        self.assertEqual(duplicate_department.status_code, 409)
+
+        staff, admin_headers = self.create_department_staff('Community Safety Department')
+        staff_id = staff['user']['id']
+        token = staff['token']
+        staff_headers = {'Authorization': f'Bearer {token}'}
+        self.assertEqual(self.client.post('/api/logout', headers=staff_headers).status_code, 200)
+        self.assertEqual(self.client.get('/api/profile', headers=staff_headers).status_code, 401)
+
+        second, admin_headers = self.create_department_staff('Community Safety Department')
+        second_id = second['user']['id']
+        self.assertEqual(self.client.patch(
+            f'/api/admin/department-staff/{second_id}',
+            json={'is_active': False},
+            headers=admin_headers,
+        ).status_code, 200)
+        self.assertEqual(self.client.get(
+            '/api/department/dashboard',
+            headers={'Authorization': f'Bearer {second["token"]}'},
+        ).status_code, 401)
+
+        listing = self.client.get('/api/admin/department-staff', headers=admin_headers)
+        self.assertEqual(listing.status_code, 200)
+        listed = {item['id']: item for item in listing.get_json()['staff']}
+        self.assertFalse(listed[second_id]['is_active'])
+        self.assertTrue(listed[staff_id]['is_active'])
+
+    def test_authentication_tokens_expire_and_logout_revokes_them(self):
+        citizen = self.client.post('/api/register', json={
+            'name': 'Expiring Session Citizen',
+            'email': self.unique_email('expiring'),
+            'password': 'securepass123',
+        }).get_json()
+        token = citizen['token']
+        conn = app_module.get_db()
+        expiry = conn.execute(
+            'SELECT session_expires_at FROM users WHERE id = ?',
+            (citizen['user']['id'],),
+        ).fetchone()['session_expires_at']
+        conn.execute(
+            'UPDATE users SET session_expires_at = ? WHERE id = ?',
+            ('2000-01-01T00:00:00Z', citizen['user']['id']),
+        )
+        conn.commit()
+        conn.close()
+        self.assertTrue(expiry > app_module.iso_now())
+        self.assertEqual(self.client.get(
+            '/api/profile',
+            headers={'Authorization': f'Bearer {token}'},
+        ).status_code, 401)
+
+        login = self.client.post('/api/login', json={
+            'email': citizen['user']['email'],
+            'password': 'securepass123',
+            'role': 'citizen',
+        }).get_json()
+        headers = {'Authorization': f'Bearer {login["token"]}'}
+        self.assertEqual(self.client.post('/api/logout', headers=headers).status_code, 200)
+        self.assertEqual(self.client.get('/api/profile', headers=headers).status_code, 401)
 
 
 if __name__ == '__main__':

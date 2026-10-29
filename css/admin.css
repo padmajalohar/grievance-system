@@ -1,6 +1,6 @@
 .queue-filters {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) repeat(2, minmax(150px, 220px));
+  grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(150px, 220px));
   gap: 12px;
   align-items: end;
   margin: 0 0 18px;
@@ -19,6 +19,43 @@
   min-height: 42px;
 }
 
+.staff-management {
+  margin-top: 24px;
+}
+
+.staff-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.staff-form label,
+.department-create-form label {
+  display: grid;
+  gap: 6px;
+  color: #42556b;
+  font-size: .76rem;
+  font-weight: bold;
+}
+
+.staff-form button {
+  align-self: end;
+}
+
+.department-create-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  max-width: 580px;
+  margin: 0 0 12px;
+}
+
+#departmentStaffMessage:empty {
+  display: none;
+}
+
 @media (max-width: 600px) {
   .queue-filters {
     grid-template-columns: 1fr 1fr;
@@ -26,5 +63,9 @@
 
   .queue-search {
     grid-column: 1 / -1;
+  }
+
+  .staff-form {
+    grid-template-columns: 1fr;
   }
 }

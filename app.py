@@ -47,6 +47,28 @@ CATEGORY_TO_DEPARTMENT = {
     "General Review": "Administrator Review Queue",
 }
 
+PREDEFINED_DEPARTMENTS = (
+    "Administration Office",
+    "Administrator Review Queue",
+    "Sanitation Department",
+    "Electrical & Street Lighting Department",
+    "Electricity Department",
+    "Water Supply Department",
+    "Waste Management Department",
+    "Road & Transport Department",
+    "Drainage Department",
+    "Public Infrastructure Department",
+    "Street Lighting Department",
+    "Campus Facilities Department",
+    "Health Department",
+    "Education Department",
+    "Public Works Department",
+    "Parks & Gardens Department",
+    "Animal Control Department",
+    "Fire & Emergency Services Department",
+    "Town Planning Department",
+)
+
 PRIORITY_SLA_HOURS = {
     "Critical": 24,
     "High": 72,
@@ -54,16 +76,33 @@ PRIORITY_SLA_HOURS = {
     "Low": 168,
 }
 
+COMPLAINT_STATUSES = (
+    "Pending",
+    "In Progress",
+    "Resolved",
+    "Rejected",
+    "Escalated",
+)
+
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.create_function("normalize_department", 1, normalize_department_name)
     return conn
 
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def session_expiry() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def normalize_department_name(value: str) -> str:
+    return " ".join((value or "").casefold().split())
 
 
 def format_dt(value: Optional[str]) -> str:
@@ -87,6 +126,26 @@ def init_db() -> None:
             role TEXT NOT NULL DEFAULT 'citizen' CHECK(role IN ('citizen','admin')),
             session_token TEXT,
             created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS departments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS department_staff_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            password_hash TEXT NOT NULL,
+            department_id INTEGER NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1)),
+            session_token TEXT UNIQUE,
+            session_expires_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (department_id) REFERENCES departments(id)
         );
 
         CREATE TABLE IF NOT EXISTS complaints (
@@ -257,6 +316,38 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_reward_reviews_citizen ON reward_reviews(citizen_id, eligible);
         """
     )
+    user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "session_expires_at" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN session_expires_at TEXT")
+    staff_columns = {row["name"] for row in conn.execute("PRAGMA table_info(department_staff_accounts)").fetchall()}
+    if "session_expires_at" not in staff_columns:
+        conn.execute("ALTER TABLE department_staff_accounts ADD COLUMN session_expires_at TEXT")
+    legacy_expiry = session_expiry()
+    conn.execute(
+        "UPDATE users SET session_expires_at = ? WHERE session_token IS NOT NULL AND session_expires_at IS NULL",
+        (legacy_expiry,),
+    )
+    conn.execute(
+        "UPDATE department_staff_accounts SET session_expires_at = ? WHERE session_token IS NOT NULL AND session_expires_at IS NULL",
+        (legacy_expiry,),
+    )
+    department_names = list(PREDEFINED_DEPARTMENTS)
+    department_names.extend(
+        row["department"]
+        for row in conn.execute(
+            "SELECT DISTINCT TRIM(department) AS department FROM complaints WHERE department IS NOT NULL AND TRIM(department) != '' ORDER BY department COLLATE NOCASE, department"
+        ).fetchall()
+    )
+    seeded_departments = set()
+    for department_name in department_names:
+        normalized = normalize_department_name(department_name)
+        if normalized in seeded_departments:
+            continue
+        seeded_departments.add(normalized)
+        conn.execute(
+            "INSERT OR IGNORE INTO departments (name, normalized_name, created_at) VALUES (?, ?, ?)",
+            (department_name.strip(), normalized, iso_now()),
+        )
     conn.executemany(
         "INSERT OR IGNORE INTO reward_rules (rule_key, points, enabled) VALUES (?, ?, 1)",
         [("verified_contribution", 10), ("evidence_approved", 5), ("resolution_verified", 20), ("verified_update", 5)],
@@ -281,29 +372,51 @@ init_db()
 
 
 def serialize_user(user_row: sqlite3.Row) -> Dict[str, Any]:
-    return {
+    user = {
         "id": user_row["id"],
         "name": user_row["name"],
         "email": user_row["email"],
         "role": user_row["role"],
         "created_at": user_row["created_at"],
     }
+    if "department" in user_row.keys():
+        user["department"] = user_row["department"]
+    return user
 
 
 def get_user_by_token(token: str) -> Optional[sqlite3.Row]:
     if not token:
         return None
     conn = get_db()
-    row = conn.execute("SELECT * FROM users WHERE session_token = ?", (token,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM users WHERE session_token = ? AND session_expires_at > ?",
+        (token, iso_now()),
+    ).fetchone()
+    if not row:
+        row = conn.execute(
+            """
+            SELECT s.id, s.name, s.email, s.password_hash, 'department_staff' AS role,
+                   s.session_token, s.created_at, s.department_id, d.name AS department,
+                   s.is_active
+            FROM department_staff_accounts s
+            JOIN departments d ON d.id = s.department_id
+            WHERE s.session_token = ? AND s.is_active = 1 AND s.session_expires_at > ?
+            """,
+            (token, iso_now()),
+        ).fetchone()
     conn.close()
     return row
 
 
 def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
     conn = get_db()
-    row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
+    row = conn.execute("SELECT * FROM users WHERE lower(email) = ?", (email.lower(),)).fetchone()
     conn.close()
     return row
+
+
+def complaint_matches_department(complaint: sqlite3.Row, user: sqlite3.Row) -> bool:
+    return normalize_department_name(complaint["department"] or "") == normalize_department_name(user["department"] or "")
 
 
 def get_complaint_by_id(complaint_id: str) -> Optional[sqlite3.Row]:
@@ -432,6 +545,20 @@ def pseudonym_for_citizen(citizen_id: int, salt: str) -> str:
 
 
 def predict_grievance(title: str, description: str, category: Optional[str] = None) -> Dict[str, Any]:
+    if re.search(r"[\u0900-\u097f\u0c80-\u0cff\u0c00-\u0c7f]", f"{title} {description} {category or ''}"):
+        return {
+            "predicted_category": "General Review",
+            "predicted_priority": "Medium",
+            "confidence": 0.0,
+            "recommended_department": "Administrator Review Queue",
+            "requires_human_review": True,
+            "model_version": "unsupported_language_fallback",
+            "model_note": (
+                "The complaint classifier does not support this language. No category or priority "
+                "prediction was made. A neutral Medium SLA priority is applied pending human assessment."
+            ),
+        }
+
     combined = f"{title} {description} {category or ''}".lower()
     candidate_scores = {
         "Water Supply": ["water", "pipe", "leak", "tank", "supply", "pressure", "faucet"],
@@ -624,18 +751,31 @@ def register():
     name = (payload.get("name") or "").strip()
     email = (payload.get("email") or "").strip().lower()
     password = payload.get("password") or ""
+    requested_role = payload.get("role", "citizen")
+
+    if requested_role != "citizen":
+        return jsonify({
+            "error": "Public registration is for citizens only. Department staff accounts must be created by an administrator."
+        }), 400
 
     if not name or not email or len(password) < 4:
         return jsonify({"error": "Name, valid email, and password of at least 4 characters are required."}), 400
 
-    if get_user_by_email(email):
+    conn = get_db()
+    existing_staff = conn.execute(
+        "SELECT 1 FROM department_staff_accounts WHERE email = ? COLLATE NOCASE",
+        (email,),
+    ).fetchone()
+    conn.close()
+    if get_user_by_email(email) or existing_staff:
         return jsonify({"error": "An account with this email already exists."}), 409
 
-    token = uuid.uuid4().hex
+    token = secrets.token_urlsafe(32)
+    expires_at = session_expiry()
     conn = get_db()
     cursor = conn.execute(
-        "INSERT INTO users (name, email, password_hash, role, session_token, created_at) VALUES (?, ?, ?, 'citizen', ?, ?)",
-        (name, email, generate_password_hash(password), token, iso_now()),
+        "INSERT INTO users (name, email, password_hash, role, session_token, session_expires_at, created_at) VALUES (?, ?, ?, 'citizen', ?, ?, ?)",
+        (name, email, generate_password_hash(password), token, expires_at, iso_now()),
     )
     conn.commit()
     user = conn.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -654,18 +794,66 @@ def login():
         return jsonify({"error": "Email and password are required."}), 400
 
     conn = get_db()
-    user = conn.execute("SELECT * FROM users WHERE email = ? AND role = ?", (email, role)).fetchone()
+    if role == "department_staff":
+        user = conn.execute(
+            """
+            SELECT s.*, d.name AS department, 'department_staff' AS role
+            FROM department_staff_accounts s
+            JOIN departments d ON d.id = s.department_id
+            WHERE s.email = ? COLLATE NOCASE AND s.is_active = 1
+            """,
+            (email,),
+        ).fetchone()
+    elif role in ("citizen", "admin"):
+        user = conn.execute("SELECT * FROM users WHERE email = ? AND role = ?", (email, role)).fetchone()
+    else:
+        user = None
     conn.close()
     if not user or not check_password_hash(user["password_hash"], password):
         return jsonify({"error": "Invalid credentials for this role."}), 401
 
-    token = uuid.uuid4().hex
+    token = secrets.token_urlsafe(32)
+    expires_at = session_expiry()
     conn = get_db()
-    conn.execute("UPDATE users SET session_token = ? WHERE id = ?", (token, user["id"]))
+    if role == "department_staff":
+        conn.execute(
+            "UPDATE department_staff_accounts SET session_token = ?, session_expires_at = ? WHERE id = ?",
+            (token, expires_at, user["id"]),
+        )
+        user = conn.execute(
+            """
+            SELECT s.*, d.name AS department, 'department_staff' AS role
+            FROM department_staff_accounts s
+            JOIN departments d ON d.id = s.department_id
+            WHERE s.id = ?
+            """,
+            (user["id"],),
+        ).fetchone()
+    else:
+        conn.execute(
+            "UPDATE users SET session_token = ?, session_expires_at = ? WHERE id = ?",
+            (token, expires_at, user["id"]),
+        )
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
     conn.commit()
-    user = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
     conn.close()
     return jsonify({"token": token, "user": serialize_user(user)})
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if not token:
+        return jsonify({"error": "Authentication required."}), 401
+    conn = get_db()
+    conn.execute("UPDATE users SET session_token = NULL, session_expires_at = NULL WHERE session_token = ?", (token,))
+    conn.execute(
+        "UPDATE department_staff_accounts SET session_token = NULL, session_expires_at = NULL WHERE session_token = ?",
+        (token,),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Signed out successfully."})
 
 
 @app.route("/api/profile")
@@ -674,6 +862,143 @@ def profile():
     if error:
         return error
     return jsonify({"user": serialize_user(user)})
+
+
+@app.route("/api/department/dashboard")
+def department_dashboard():
+    user, error = require_auth("department_staff")
+    if error:
+        return error
+    conn = get_db()
+    department_key = normalize_department_name(user["department"])
+    status_rows = conn.execute(
+        "SELECT status, COUNT(*) AS count FROM complaints WHERE normalize_department(department) = ? GROUP BY status",
+        (department_key,),
+    ).fetchall()
+    priority_rows = conn.execute(
+        "SELECT priority, COUNT(*) AS count FROM complaints WHERE normalize_department(department) = ? GROUP BY priority",
+        (department_key,),
+    ).fetchall()
+    assigned = conn.execute(
+        "SELECT status, deadline FROM complaints WHERE normalize_department(department) = ?",
+        (department_key,),
+    ).fetchall()
+    status_counts = {status: 0 for status in COMPLAINT_STATUSES}
+    for row in status_rows:
+        status_counts[row["status"]] = row["count"]
+    priority_counts = {priority: 0 for priority in PRIORITY_SLA_HOURS}
+    for row in priority_rows:
+        if row["priority"] not in (None, ""):
+            priority_counts[row["priority"]] = row["count"]
+    now = iso_now()
+    stats = {
+        "total": len(assigned),
+        "priority_counts": priority_counts,
+        "status_counts": status_counts,
+        "overdue": sum(
+            row["status"] not in ("Resolved", "Rejected") and row["deadline"] and row["deadline"] < now
+            for row in assigned
+        ),
+    }
+    conn.close()
+    return jsonify({"department": user["department"], "stats": stats})
+
+
+@app.route("/api/department/complaints")
+def department_complaints():
+    user, error = require_auth("department_staff")
+    if error:
+        return error
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM complaints WHERE normalize_department(department) = ? ORDER BY created_at DESC",
+        (normalize_department_name(user["department"]),),
+    ).fetchall()
+    conn.close()
+    return jsonify({"complaints": [serialize_complaint(row) for row in rows]})
+
+
+@app.route("/api/department/complaints/<complaint_id>")
+def department_complaint_details(complaint_id: str):
+    user, error = require_auth("department_staff")
+    if error:
+        return error
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM complaints WHERE complaint_id = ? AND normalize_department(department) = ?",
+        (complaint_id, normalize_department_name(user["department"])),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Complaint not found."}), 404
+    complaint = serialize_complaint(row)
+    complaint["history"] = get_complaint_history(complaint_id)
+    complaint["prediction"] = get_ai_prediction(complaint_id)
+    return jsonify({"complaint": complaint})
+
+
+@app.route("/api/department/complaints/<complaint_id>", methods=["PATCH"])
+def update_department_complaint(complaint_id: str):
+    user, error = require_auth("department_staff")
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    requested_status = payload.get("status")
+    resolution = payload.get("resolution", "")
+    if requested_status not in (None, "In Progress", "Resolved"):
+        return jsonify({"error": "Department staff may only set status to In Progress or Resolved."}), 400
+    if not isinstance(resolution, str) or len(resolution.strip()) > 5000:
+        return jsonify({"error": "Resolution notes must be 5000 characters or fewer."}), 400
+    resolution = resolution.strip()
+
+    conn = get_db()
+    conn.execute("BEGIN IMMEDIATE")
+    complaint = conn.execute(
+        "SELECT * FROM complaints WHERE complaint_id = ? AND normalize_department(department) = ?",
+        (complaint_id, normalize_department_name(user["department"])),
+    ).fetchone()
+    if not complaint:
+        conn.close()
+        return jsonify({"error": "Complaint not found."}), 404
+    current_status = complaint["status"]
+    allowed_transitions = {
+        "Pending": {"In Progress"},
+        "In Progress": {"Resolved"},
+        "Escalated": {"In Progress"},
+    }
+    if requested_status and requested_status != current_status:
+        if requested_status not in allowed_transitions.get(current_status, set()):
+            conn.close()
+            return jsonify({"error": f"Status cannot transition from {current_status} to {requested_status}."}), 409
+        if requested_status == "Resolved" and not resolution and not complaint["resolution"]:
+            conn.close()
+            return jsonify({"error": "Resolution notes are required before resolving a complaint."}), 400
+
+    now = iso_now()
+    new_status = requested_status or current_status
+    new_resolution = resolution or complaint["resolution"]
+    conn.execute(
+        "UPDATE complaints SET status = ?, resolution = ?, updated_at = ? WHERE complaint_id = ?",
+        (new_status, new_resolution, now, complaint_id),
+    )
+    if requested_status and requested_status != current_status:
+        conn.execute(
+            "INSERT INTO complaint_history (complaint_id, action, details, changed_by, created_at) VALUES (?, ?, ?, NULL, ?)",
+            (complaint_id, "Status updated", f"Department staff account {user['id']} changed status to {new_status}.", now),
+        )
+    if resolution and resolution != (complaint["resolution"] or ""):
+        conn.execute(
+            "INSERT INTO complaint_history (complaint_id, action, details, changed_by, created_at) VALUES (?, ?, ?, NULL, ?)",
+            (complaint_id, "Resolution updated", f"Department staff account {user['id']}: {resolution}", now),
+        )
+    conn.execute(
+        "INSERT INTO audit_logs (actor_id, actor_role, complaint_id, action, details, created_at) VALUES (?, 'department_staff', ?, ?, ?, ?)",
+        (user["id"], complaint_id, "department_complaint_updated", f"Status: {new_status}; department: {user['department']}.", now),
+    )
+    conn.commit()
+    updated = conn.execute("SELECT * FROM complaints WHERE complaint_id = ?", (complaint_id,)).fetchone()
+    conn.close()
+    return jsonify({"message": "Complaint updated successfully.", "complaint": serialize_complaint(updated)})
 
 
 @app.route("/api/citizen/complaints")
@@ -787,7 +1112,7 @@ def complaint_evidence(complaint_id: str):
 
     conn = get_db()
     row = conn.execute(
-        "SELECT user_id, evidence FROM complaints WHERE complaint_id = ?",
+        "SELECT user_id, evidence, department FROM complaints WHERE complaint_id = ?",
         (complaint_id,),
     ).fetchone()
     conn.close()
@@ -795,6 +1120,8 @@ def complaint_evidence(complaint_id: str):
         return jsonify({"error": "Evidence not found."}), 404
     if user["role"] == "citizen" and row["user_id"] != user["id"]:
         return jsonify({"error": "You are not allowed to access this evidence."}), 403
+    if user["role"] == "department_staff" and not complaint_matches_department(row, user):
+        return jsonify({"error": "Evidence not found."}), 404
 
     return send_from_directory(
         UPLOAD_FOLDER,
@@ -815,6 +1142,8 @@ def complaint_details(complaint_id: str):
         return jsonify({"error": "Complaint not found."}), 404
     if user["role"] == "citizen" and row["user_id"] != user["id"]:
         return jsonify({"error": "You are not allowed to view this complaint."}), 403
+    if user["role"] == "department_staff" and not complaint_matches_department(row, user):
+        return jsonify({"error": "Complaint not found."}), 404
 
     complaint = serialize_complaint(row)
     complaint["history"] = get_complaint_history(complaint_id)
@@ -1255,6 +1584,138 @@ def admin_dashboard():
     })
 
 
+@app.route("/api/admin/departments", methods=["GET", "POST"])
+def manage_departments():
+    admin, error = require_auth("admin")
+    if error:
+        return error
+    conn = get_db()
+    if request.method == "GET":
+        rows = conn.execute("SELECT id, name FROM departments ORDER BY name COLLATE NOCASE").fetchall()
+        conn.close()
+        return jsonify({"departments": [dict(row) for row in rows]})
+
+    payload = request.get_json(silent=True) or {}
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 100:
+        conn.close()
+        return jsonify({"error": "Department name must contain 1 to 100 characters."}), 400
+    name = " ".join(name.split())
+    normalized = normalize_department_name(name)
+    if conn.execute("SELECT 1 FROM departments WHERE normalized_name = ?", (normalized,)).fetchone():
+        conn.close()
+        return jsonify({"error": "A department with this name already exists."}), 409
+    cursor = conn.execute(
+        "INSERT INTO departments (name, normalized_name, created_at) VALUES (?, ?, ?)",
+        (name, normalized, iso_now()),
+    )
+    conn.commit()
+    department = conn.execute("SELECT id, name FROM departments WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    conn.close()
+    add_audit_log(admin["id"], "admin", None, "department_created", f"Created department {name}.")
+    return jsonify({"department": dict(department)}), 201
+
+
+@app.route("/api/admin/department-staff", methods=["GET", "POST"])
+def manage_department_staff():
+    admin, error = require_auth("admin")
+    if error:
+        return error
+    conn = get_db()
+    if request.method == "GET":
+        rows = conn.execute(
+            """
+            SELECT s.id, s.name, s.email, s.department_id, d.name AS department,
+                   s.is_active, s.created_at
+            FROM department_staff_accounts s
+            JOIN departments d ON d.id = s.department_id
+            ORDER BY s.created_at DESC
+            """
+        ).fetchall()
+        conn.close()
+        return jsonify({"staff": [dict(row) for row in rows]})
+
+    payload = request.get_json(silent=True) or {}
+    name = payload.get("name")
+    email = payload.get("email")
+    password = payload.get("password")
+    department = payload.get("department")
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
+        conn.close()
+        return jsonify({"error": "Staff name must contain 1 to 120 characters."}), 400
+    if not isinstance(email, str) or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email.strip()):
+        conn.close()
+        return jsonify({"error": "A valid email address is required."}), 400
+    if not isinstance(password, str) or len(password) < 12:
+        conn.close()
+        return jsonify({"error": "Department staff passwords must contain at least 12 characters."}), 400
+    if not isinstance(department, str) or not department.strip():
+        conn.close()
+        return jsonify({"error": "A department is required."}), 400
+    if get_user_by_email(email.strip().lower()) or conn.execute(
+        "SELECT 1 FROM department_staff_accounts WHERE email = ? COLLATE NOCASE",
+        (email.strip(),),
+    ).fetchone():
+        conn.close()
+        return jsonify({"error": "An account with this email already exists."}), 409
+    department_row = conn.execute(
+        "SELECT id, name FROM departments WHERE normalized_name = ?",
+        (normalize_department_name(department),),
+    ).fetchone()
+    if not department_row:
+        conn.close()
+        return jsonify({"error": "Select an existing department."}), 400
+    cursor = conn.execute(
+        """
+        INSERT INTO department_staff_accounts
+            (name, email, password_hash, department_id, is_active, created_at)
+        VALUES (?, ?, ?, ?, 1, ?)
+        """,
+        (name.strip(), email.strip().lower(), generate_password_hash(password), department_row["id"], iso_now()),
+    )
+    conn.commit()
+    staff = conn.execute(
+        """
+        SELECT s.id, s.name, s.email, s.department_id, d.name AS department,
+               s.is_active, s.created_at
+        FROM department_staff_accounts s
+        JOIN departments d ON d.id = s.department_id
+        WHERE s.id = ?
+        """,
+        (cursor.lastrowid,),
+    ).fetchone()
+    conn.close()
+    add_audit_log(admin["id"], "admin", None, "department_staff_created", f"Created department staff account {staff['id']} for {staff['department']}.")
+    return jsonify({"staff": dict(staff)}), 201
+
+
+@app.route("/api/admin/department-staff/<int:staff_id>", methods=["PATCH"])
+def update_department_staff(staff_id: int):
+    admin, error = require_auth("admin")
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    is_active = payload.get("is_active")
+    if not isinstance(is_active, bool):
+        return jsonify({"error": "is_active must be a boolean."}), 400
+    conn = get_db()
+    staff = conn.execute(
+        "SELECT id, email FROM department_staff_accounts WHERE id = ?",
+        (staff_id,),
+    ).fetchone()
+    if not staff:
+        conn.close()
+        return jsonify({"error": "Department staff account not found."}), 404
+    conn.execute(
+        "UPDATE department_staff_accounts SET is_active = ?, session_token = CASE WHEN ? = 0 THEN NULL ELSE session_token END, session_expires_at = CASE WHEN ? = 0 THEN NULL ELSE session_expires_at END WHERE id = ?",
+        (int(is_active), int(is_active), int(is_active), staff_id),
+    )
+    conn.commit()
+    conn.close()
+    add_audit_log(admin["id"], "admin", None, "department_staff_status_updated", f"Department staff account {staff_id} active={is_active}.")
+    return jsonify({"message": "Department staff account updated.", "id": staff_id, "is_active": is_active})
+
+
 @app.route("/api/admin/complaints")
 def admin_complaints():
     user, error = require_auth("admin")
@@ -1287,6 +1748,15 @@ def update_complaint(complaint_id: str):
     if not row:
         conn.close()
         return jsonify({"error": "Complaint not found."}), 404
+    if department:
+        department_row = conn.execute(
+            "SELECT name FROM departments WHERE normalized_name = ?",
+            (normalize_department_name(department),),
+        ).fetchone()
+        if not department_row:
+            conn.close()
+            return jsonify({"error": "Select an existing department."}), 400
+        department = department_row["name"]
 
     update_fields = ["updated_at = ?"]
     params: List[Any] = [iso_now()]

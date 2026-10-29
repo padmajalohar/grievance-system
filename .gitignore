@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 grievance.db
+grievance.db.backup-*.bak
 uploads/
 =======
 # Byte-compiled / optimized / DLL files
